@@ -35,4 +35,18 @@
 		</sql>
 	</changeSet>
 
+	<changeSet author="akudinov" id="ak2">
+		<sql>
+			<![CDATA[
+			ALTER TABLE document_tree 
+				DROP COLUMN level,
+				DROP COLUMN right_branch,
+				DROP COLUMN left_branch,
+				DROP INDEX doc_tree_leftright_IDX,
+				DROP INDEX doc_tree_right_IDX,
+				DROP INDEX doc_tree_left_IDX;
+			]]>
+		</sql>
+	</changeSet>
+
 </databaseChangeLog>
