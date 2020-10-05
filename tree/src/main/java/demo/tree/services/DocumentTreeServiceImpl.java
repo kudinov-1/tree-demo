@@ -5,15 +5,12 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 import org.jooq.DSLContext;
-
+import org.jooq.impl.DSL;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import demo.tree.dto.Document;
 import demo.tree.dto.DocumentFlatItem;
-import demo.tree.pojo.tables.DocumentTree;
-import demo.tree.pojo.tables.records.DocumentTreeRecord;
 
 import static demo.tree.pojo.tables.DocumentTree.DOCUMENT_TREE;
 
@@ -32,7 +29,6 @@ public class DocumentTreeServiceImpl implements DocumentTreeService {
 	public Document getDocumentTree(Long documentId) {
 		//first, get the list of document entities
 		List<DocumentFlatItem> documentList = getDocumentList(documentId);
-
 
 		//then convert the list to a hierarchical structure
 		Map<Long, Document> map = documentList
@@ -53,69 +49,48 @@ public class DocumentTreeServiceImpl implements DocumentTreeService {
 	 * @see demo.tree.services.DocumentTreeService#getDocumentList(java.lang.Long)
 	 * Returns a list of documents in the hierarchy, located under the given document (including the given document)
 	 * The returning list of documents has a plain structure, not hierarchical
+	 * Uses MySQL "with recursive" CTE function to select the hierarchy in one go
 	 */
 	@Override
 	public List<DocumentFlatItem> getDocumentList(Long documentId) {
-		DocumentTree parent = DOCUMENT_TREE.as("parent");
-		DocumentTree node = DOCUMENT_TREE.as("node");
-		
-		return dsl.select(node.ID,
-				node.PARENT_ID,
-				node.NAME,
-				node.DESCRIPTION,
-				node.LEVEL)
-				.from(parent, node).where(node.LEFT_BRANCH.between(parent.LEFT_BRANCH, parent.RIGHT_BRANCH)
-						.and(parent.ID.eq(documentId)))
-				.orderBy(node.LEFT_BRANCH)
-				.fetch().into(DocumentFlatItem.class);
+		return dsl.withRecursive("children").as(
+				DSL.select(DOCUMENT_TREE.ID, DOCUMENT_TREE.PARENT_ID, DOCUMENT_TREE.NAME, DSL.field("1", Long.class).as("level"))
+				.from(DOCUMENT_TREE)
+				.where(DOCUMENT_TREE.ID.eq(documentId))
+				.unionAll(
+						DSL.select(DOCUMENT_TREE.ID, DOCUMENT_TREE.PARENT_ID, DOCUMENT_TREE.NAME, DSL.field("children.level + 1", Long.class).as("level"))
+						.from(DOCUMENT_TREE)
+						.innerJoin(DSL.name("children"))
+						.on(DOCUMENT_TREE.PARENT_ID.eq(DSL.field(DSL.name("children", "ID"), Long.class)))
+						)
+				)
+		.select(DOCUMENT_TREE.as("children").ID, DOCUMENT_TREE.as("children").PARENT_ID, DOCUMENT_TREE.as("children").NAME, DSL.field("level", Long.class))
+		.from(DSL.name("children"))
+		.orderBy(DSL.field("level"))
+		.fetch().into(DocumentFlatItem.class);
 	}
 
-	
+
 	/*
-	 * The method is annotated as @Transactional, because it executes a set of SQL queries which has to be executed in one transaction.
-	 * If one of the queries is failing, the whole transaction shall be rolled back
+	 * (non-Javadoc)
+	 * @see demo.tree.services.DocumentTreeService#addDocument(demo.tree.dto.Document)
+	 * Creates a new document in the hierarchy. 
 	 */
 	@Override
-	@Transactional(rollbackFor = Exception.class)
-	public Long addDocument(Document document) throws Exception {
-		
-		//1. get the right index of the parent element
-		DocumentTreeRecord parentRecord = dsl
-				.selectFrom(DOCUMENT_TREE)
-				.where(DOCUMENT_TREE.ID.eq(document.getParentId()))
-				.fetchOne();
-
-		//2. update right indexes
-		dsl.update(DOCUMENT_TREE)
-			.set(DOCUMENT_TREE.RIGHT_BRANCH, DOCUMENT_TREE.RIGHT_BRANCH.add(2))
-			.where(DOCUMENT_TREE.RIGHT_BRANCH.ge(parentRecord.getRightBranch()))
-			.execute();
-		
-		//3. update left indexes
-		dsl.update(DOCUMENT_TREE)
-			.set(DOCUMENT_TREE.LEFT_BRANCH, DOCUMENT_TREE.LEFT_BRANCH.add(2))
-			.where(DOCUMENT_TREE.LEFT_BRANCH.ge(parentRecord.getRightBranch()))
-			.execute();
+	public Long addDocument(Document document) {
 		
 		//4. insert the new document to the hierarchy
 		Long newDocumentId = dsl.insertInto(DOCUMENT_TREE,
 				DOCUMENT_TREE.PARENT_ID,
 				DOCUMENT_TREE.NAME,
-				DOCUMENT_TREE.DESCRIPTION,
-				DOCUMENT_TREE.LEFT_BRANCH,
-				DOCUMENT_TREE.RIGHT_BRANCH,
-				DOCUMENT_TREE.LEVEL)
+				DOCUMENT_TREE.DESCRIPTION)
 			.values(document.getParentId(),
 					document.getName(),
-					document.getDescription(),
-					parentRecord.getRightBranch(),
-					parentRecord.getRightBranch() + 1,
-					parentRecord.getLevel() + 1)
+					document.getDescription())
 			.returning()
 			.fetchOne().getId();
 
 		return newDocumentId;
 	}
 
-	
 }
